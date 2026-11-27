@@ -1,5 +1,7 @@
 # zipcage
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/draarivpatel-ui/zipcage/badge)](https://scorecard.dev/viewer/?uri=github.com/draarivpatel-ui/zipcage)
+
 Zero-dependency ZIP security inspection and safe extraction for Node.js.
 
 `zipcage` parses classic single-disk ZIP archives fail-closed before untrusted

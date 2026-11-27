@@ -12,9 +12,7 @@ upgrade promptly when a security release is published.
 
 ## Reporting a vulnerability
 
-Report suspected vulnerabilities privately through the GitHub Security
-Advisories workflow for `draarivpatel-ui/zipcage`. Do not open a public issue,
-pull request or discussion with a working exploit archive.
+Use the private GitHub Security Advisories form: [Report a vulnerability](https://github.com/draarivpatel-ui/zipcage/security/advisories/new). Do not open a public issue, pull request or discussion with a working exploit archive.
 
 Include:
 
@@ -62,9 +60,7 @@ Out of scope:
 
 ## Response expectations
 
-Reports are triaged as time permits. A confirmed vulnerability receives a fix
-or mitigation plan before public disclosure whenever practical. Credit is given
-in release notes only when the reporter asks for it.
+We acknowledge reports within 48 hours. We aim to confirm or reject the report within 7 days, release a fix as soon as practical, and coordinate public disclosure with the reporter. Unless a shorter deadline is required by an actively exploited issue, please allow up to 90 days for a coordinated fix and disclosure. Credit is given in release notes only when the reporter asks for it.
 
 ## Hardening guidance
 

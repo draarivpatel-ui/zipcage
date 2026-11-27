@@ -107,7 +107,7 @@ test('package manifest declares clean dual-module packaging', async () => {
   assert.equal(pkg.exports['.'].import, './src/index.mjs');
   assert.equal(pkg.exports['.'].require, './cjs/index.cjs');
   assert.deepEqual(pkg.dependencies, {});
-  assert.deepEqual(pkg.devDependencies, {});
+  assert.deepEqual(pkg.devDependencies, { 'fast-check': '4.10.3' });
   assert.equal(pkg.sideEffects, false);
   assert.equal(pkg.engines.node, '>=18');
 });

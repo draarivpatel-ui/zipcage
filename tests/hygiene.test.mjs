@@ -167,16 +167,17 @@ test('pull request template requires exact test count and security analysis', as
   assert.match(text, /No dependencies were added/);
 });
 
-test('package has no lockfile or dependency directory', async () => {
-  await assert.rejects(access(path.join(root, 'node_modules')));
-  await assert.rejects(access(path.join(root, 'package-lock.json')));
+test('package lock is present and dependency artifacts are ignored', async () => {
+  await access(path.join(root, 'package-lock.json'));
   await assert.rejects(access(path.join(root, 'npm-shrinkwrap.json')));
+  const gitignore = await readFile(path.join(root, '.gitignore'), 'utf8');
+  assert.match(gitignore, /^node_modules\/$/m);
 });
 
-test('package has zero runtime and development dependencies', async () => {
+test('package keeps runtime dependencies empty and fast-check development-only', async () => {
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   assert.deepEqual(pkg.dependencies, {});
-  assert.deepEqual(pkg.devDependencies, {});
+  assert.deepEqual(pkg.devDependencies, { 'fast-check': '4.10.3' });
   assert.equal(pkg.sideEffects, false);
 });
 

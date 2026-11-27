@@ -12,7 +12,7 @@ upgrade promptly when a security release is published.
 
 ## Reporting a vulnerability
 
-Use the private GitHub Security Advisories form: [Report a vulnerability](https://github.com/draarivpatel-ui/zipcage/security/advisories/new). Do not open a public issue, pull request or discussion with a working exploit archive.
+Report suspected vulnerabilities privately through the GitHub Security Advisories form: [Report a vulnerability](https://github.com/draarivpatel-ui/zipcage/security/advisories/new). Do not open a public issue, pull request or discussion with a working exploit archive.
 
 Include:
 

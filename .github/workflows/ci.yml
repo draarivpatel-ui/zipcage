@@ -22,9 +22,7 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Verify generated CommonJS build is current
         shell: bash
-        run: |
-          node scripts/build-cjs.mjs
-          git diff --exit-code -- cjs/index.cjs
+        run: node scripts/build-cjs.mjs --check
       - name: Run deterministic test suite
         shell: bash
         run: node --test tests/*.test.mjs

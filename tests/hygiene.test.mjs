@@ -4,7 +4,7 @@ import { readdir, readFile, access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const EXPECTED_TEST_COUNT = 442;
+const EXPECTED_TEST_COUNT = 459;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKIP_ENTRIES = new Set(['.git', 'node_modules', '.DS_Store']);
 

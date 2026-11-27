@@ -24,6 +24,42 @@ function single(entries, options) {
   return inspectZipBuffer(zip(entries), options);
 }
 
+function unicodePathExtra(unicodeName, nameBytes = Buffer.from('safe.txt')) {
+  const unicode = Buffer.from(unicodeName, 'utf8');
+  const output = Buffer.alloc(9 + unicode.length);
+  output.writeUInt16LE(0x7075, 0);
+  output.writeUInt16LE(5 + unicode.length, 2);
+  output[4] = 1;
+  output.writeUInt32LE(crc32(nameBytes), 5);
+  unicode.copy(output, 9);
+  return output;
+}
+
+function forgedEocdComment() {
+  const commentLength = 64;
+  const comment = Buffer.alloc(commentLength);
+  comment.writeUInt32LE(0x06054b50, 0);
+  comment.writeUInt16LE(0, 4);
+  comment.writeUInt16LE(0, 6);
+  comment.writeUInt16LE(0, 8);
+  comment.writeUInt16LE(0, 10);
+  comment.writeUInt32LE(0, 12);
+  comment.writeUInt32LE(22, 16);
+  comment.writeUInt16LE(commentLength - 22, 20);
+  return comment;
+}
+
+function unsignedDescriptorArchive() {
+  const signed = zip([{ name: 'x', data: 'descriptor bytes', method: 'deflate', dataDescriptor: true }]);
+  const signedReport = inspectZipBuffer(signed);
+  const start = signedReport.entries[0].dataEnd;
+  const output = Buffer.concat([signed.subarray(0, start), signed.subarray(start + 4)]);
+  const signedEocd = findEocd(signed);
+  const outputEocd = findEocd(output);
+  output.writeUInt32LE(signed.readUInt32LE(signedEocd + 16) - 4, outputEocd + 16);
+  return output;
+}
+
 test('empty input is truncated', () => {
   const report = inspectZipBuffer(Buffer.alloc(0));
   assert.equal(report.safe, false);
@@ -654,4 +690,138 @@ test('inspection entries expose central and local header facts', () => {
 test('finding codes are stable machine-readable strings', () => {
   const report = inspectZipBuffer(zip([{ name: '../x', data: 'x' }]));
   assert.ok(findingCodes(report).every((code) => code.startsWith('ERR_ZIPCAGE_')));
+});
+
+test('ambiguous EOCD records inside an archive comment are rejected', () => {
+  const archive = zip([], { comment: forgedEocdComment() });
+  for (const options of [undefined, { rejectPolyglot: false }]) {
+    const report = inspectZipBuffer(archive, options);
+    assert.equal(report.safe, false);
+    assert.equal(hasFinding(report, CODE.MALFORMED_ZIP), true);
+    assert.equal(report.findings.some((finding) => finding.message.includes('ambiguous')), true);
+  }
+});
+
+
+test('a forged exact EOCD in trailing bytes is rejected when polyglot checks are relaxed', () => {
+  const real = zip([]);
+  const trailing = Buffer.alloc(64);
+  trailing.writeUInt32LE(0x06054b50, 0);
+  trailing.writeUInt16LE(0, 4);
+  trailing.writeUInt16LE(0, 6);
+  trailing.writeUInt16LE(0, 8);
+  trailing.writeUInt16LE(0, 10);
+  trailing.writeUInt32LE(0, 12);
+  trailing.writeUInt32LE(real.length, 16);
+  trailing.writeUInt16LE(42, 20);
+  const archive = Buffer.concat([real, trailing]);
+  const report = inspectZipBuffer(archive, { rejectPolyglot: false });
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.MALFORMED_ZIP), true);
+  assert.equal(report.findings.some((finding) => finding.message.includes('ambiguous')), true);
+});
+
+
+test('an EOCD inside stored entry data does not replace the outer EOCD by default', () => {
+  const inner = zip([]);
+  const report = inspectZipBuffer(zip([{ name: 'inner.zip', data: inner }]));
+  assert.equal(report.safe, true, JSON.stringify(report.findings));
+});
+
+test('an EOCD inside stored entry data is ambiguous when trailing polyglot bytes are allowed', () => {
+  const inner = zip([]);
+  const report = inspectZipBuffer(zip([{ name: 'inner.zip', data: inner }]), { rejectPolyglot: false });
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.MALFORMED_ZIP), true);
+});
+
+test('incomplete EOCD-like bytes inside a valid comment do not invalidate the archive', () => {
+  const comment = Buffer.concat([Buffer.from('abcdef'), Buffer.from([0x50, 0x4b, 0x05, 0x06]), Buffer.alloc(40)]);
+  const report = inspectZipBuffer(zip([], { comment }));
+  assert.equal(report.safe, true, JSON.stringify(report.findings));
+});
+
+test('hostile Unicode path extra field in the central directory is rejected', () => {
+  const report = single([{ name: 'safe.txt', data: 'x', centralExtra: unicodePathExtra('../../evil.txt') }]);
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.UNICODE_PATH_MISMATCH), true);
+});
+
+test('hostile Unicode path extra field in the local header is rejected', () => {
+  const report = single([{ name: 'safe.txt', data: 'x', localExtra: unicodePathExtra('../../evil.txt') }]);
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.UNICODE_PATH_MISMATCH), true);
+});
+
+test('consistent Unicode path extra fields are accepted', () => {
+  const extra = unicodePathExtra('safe.txt');
+  const report = single([{ name: 'safe.txt', data: 'x', centralExtra: extra, localExtra: extra }]);
+  assert.equal(report.safe, true, JSON.stringify(report.findings));
+});
+
+test('Unicode path extra field checksum mismatch is rejected', () => {
+  const extra = unicodePathExtra('safe.txt');
+  extra[5] ^= 1;
+  const report = single([{ name: 'safe.txt', data: 'x', centralExtra: extra }]);
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.UNICODE_PATH_MISMATCH), true);
+});
+
+test('invalid UTF-8 in a Unicode path extra field is rejected', () => {
+  const extra = unicodePathExtra('x');
+  extra[9] = 0xff;
+  const report = single([{ name: 'safe.txt', data: 'x', centralExtra: extra }]);
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.INVALID_ENCODING), true);
+});
+
+test('ZIP64 compressed-size sentinel is rejected without a ZIP64 extra field', () => {
+  const report = single([{ name: 'x', data: 'x', compressedSize: 0xffffffff }]);
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.UNSUPPORTED_ZIP64), true);
+});
+
+test('ZIP64 uncompressed-size sentinel is rejected even with permissive size limits', () => {
+  const report = single([{ name: 'x', data: 'x', uncompressedSize: 0xffffffff }], {
+    maxEntryUncompressedBytes: 0xffffffff,
+    maxTotalUncompressedBytes: 0xffffffff,
+    maxCompressionRatio: Infinity
+  });
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.UNSUPPORTED_ZIP64), true);
+});
+
+test('ZIP64 local-header-offset sentinel is rejected without a ZIP64 extra field', () => {
+  const report = single([{ name: 'x', data: 'x', centralLocalHeaderOffset: 0xffffffff }]);
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.UNSUPPORTED_ZIP64), true);
+});
+
+
+test('pathological over-deep entries do not receive quadratic collision analysis', () => {
+  const deep = 'a/'.repeat(40) + 'x';
+  const report = inspectZipBuffer(zip([
+    { name: 'a', data: '' },
+    { name: deep, data: '' }
+  ]));
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.PATH_TOO_DEEP), true);
+  assert.equal(report.findings.some((finding) => finding.code === CODE.FILE_DIRECTORY_COLLISION && finding.entryIndex === 1), false);
+});
+
+test('unsigned data descriptor archives are verified and read exactly', async () => {
+  const archive = unsignedDescriptorArchive();
+  const report = inspectZipBuffer(archive);
+  assert.equal(report.safe, true, JSON.stringify(report.findings));
+  assert.equal((await readZipEntry(archive, 'x')).toString(), 'descriptor bytes');
+});
+
+test('corrupt unsigned data descriptor compressed size is rejected', () => {
+  const archive = unsignedDescriptorArchive();
+  const before = inspectZipBuffer(archive);
+  const start = before.entries[0].dataEnd;
+  const mutated = patchUInt32(archive, start + 4, before.entries[0].compressedSize + 1);
+  const report = inspectZipBuffer(mutated);
+  assert.equal(report.safe, false);
+  assert.equal(hasFinding(report, CODE.HEADER_MISMATCH), true);
 });

@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const args = process.argv.slice(2);
+for (const arg of args) {
+  if (arg !== '--check') throw new Error('unknown build-cjs argument: ' + arg);
+}
+const check = args.includes('--check');
 const source = await readFile(path.join(root, 'src', 'index.mjs'), 'utf8');
 
 const EXPORT_NAMES = [
@@ -24,6 +29,10 @@ const imports = [
   [
     "import { createInflateRaw, deflateRawSync } from 'node:zlib';",
     "const { createInflateRaw, deflateRawSync } = require('node:zlib');"
+  ],
+  [
+    "import { randomBytes } from 'node:crypto';",
+    "const { randomBytes } = require('node:crypto');"
   ],
   [
     "import { promises as fs } from 'node:fs';",
@@ -70,6 +79,22 @@ const output = [
   ''
 ].join('\n');
 
-await mkdir(path.join(root, 'cjs'), { recursive: true });
-await writeFile(path.join(root, 'cjs', 'index.cjs'), output, 'utf8');
-process.stdout.write('cjs/index.cjs generated from src/index.mjs\n');
+const outputPath = path.join(root, 'cjs', 'index.cjs');
+if (check) {
+  let current;
+  try {
+    current = await readFile(outputPath);
+  } catch (error) {
+    console.error('cjs/index.cjs is missing or unreadable');
+    process.exitCode = 1;
+  }
+  if (process.exitCode !== 1 && !current.equals(Buffer.from(output, 'utf8'))) {
+    console.error('cjs/index.cjs is stale; run node scripts/build-cjs.mjs');
+    process.exitCode = 1;
+  }
+  if (process.exitCode !== 1) process.stdout.write('cjs/index.cjs is up to date\n');
+} else {
+  await mkdir(path.join(root, 'cjs'), { recursive: true });
+  await writeFile(outputPath, output, 'utf8');
+  process.stdout.write('cjs/index.cjs generated from src/index.mjs\n');
+}

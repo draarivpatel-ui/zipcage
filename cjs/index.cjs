@@ -10,6 +10,7 @@
  * module formats have identical behavior.
  */
 const { createInflateRaw, deflateRawSync } = require('node:zlib');
+const { randomBytes } = require('node:crypto');
 const { promises: fs } = require('node:fs');
 const path = require('node:path');
 const { Buffer } = require('node:buffer');
@@ -27,6 +28,7 @@ const CODE = Object.freeze({
   RATIO_LIMIT: 'ERR_ZIPCAGE_RATIO_LIMIT',
   OVERLAPPING_DATA: 'ERR_ZIPCAGE_OVERLAPPING_DATA',
   INVALID_ENCODING: 'ERR_ZIPCAGE_INVALID_ENCODING',
+  UNICODE_PATH_MISMATCH: 'ERR_ZIPCAGE_UNICODE_PATH_MISMATCH',
   EMPTY_PATH: 'ERR_ZIPCAGE_EMPTY_PATH',
   PATH_TOO_DEEP: 'ERR_ZIPCAGE_PATH_TOO_DEEP',
   PATH_TOO_LONG: 'ERR_ZIPCAGE_PATH_TOO_LONG',
@@ -101,6 +103,7 @@ const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_SIGNATURE = 0x02014b50;
 const LOCAL_SIGNATURE = 0x04034b50;
 const DATA_DESCRIPTOR_SIGNATURE = 0x08074b50;
+const UNICODE_PATH_EXTRA_ID = 0x7075;
 const EOCD_MIN_LENGTH = 22;
 const CENTRAL_FIXED_LENGTH = 46;
 const LOCAL_FIXED_LENGTH = 30;
@@ -314,6 +317,7 @@ function extraFieldState(extra) {
   let offset = 0;
   let malformed = false;
   let zip64 = false;
+  const unicodePaths = [];
   while (offset + 4 <= extra.length) {
     const id = readUInt16(extra, offset);
     const size = readUInt16(extra, offset + 2);
@@ -322,25 +326,69 @@ function extraFieldState(extra) {
       malformed = true;
       break;
     }
+    if (id === UNICODE_PATH_EXTRA_ID) {
+      unicodePaths.push(extra.subarray(offset + 4, offset + 4 + size));
+    }
     offset += 4 + size;
   }
   if (offset !== extra.length) malformed = true;
-  return { malformed, zip64 };
+  return { malformed, zip64, unicodePaths };
+}
+
+function validateUnicodePathExtra(entry, field, location, addFinding) {
+  if (field.length < 5) {
+    addFinding(CODE.MALFORMED_ZIP, 'Unicode path extra field in the ' + location + ' is truncated', entry.index, entry.name);
+    return;
+  }
+  if (field[0] !== 1) {
+    addFinding(CODE.MALFORMED_ZIP, 'Unicode path extra field in the ' + location + ' has an unsupported version', entry.index, entry.name);
+    return;
+  }
+  if (readUInt32(field, 1) !== crc32(entry.nameBytes)) {
+    addFinding(CODE.UNICODE_PATH_MISMATCH, 'Unicode path extra field checksum does not match the primary filename bytes', entry.index, entry.name);
+  }
+  let unicodeName;
+  try {
+    unicodeName = textDecoder.decode(field.subarray(5));
+  } catch {
+    addFinding(CODE.INVALID_ENCODING, 'Unicode path extra field is not valid UTF-8', entry.index, entry.name);
+    return;
+  }
+  if (unicodeName !== entry.name) {
+    addFinding(CODE.UNICODE_PATH_MISMATCH, 'Unicode path extra field disagrees with the primary filename and is a parser-differential risk', entry.index, entry.name);
+  }
+}
+
+function validateUnicodePathExtras(entry, centralState, localState, addFinding) {
+  for (const [location, state] of [['central directory', centralState], ['local file header', localState]]) {
+    if (!state) continue;
+    if (state.unicodePaths.length > 1) {
+      addFinding(CODE.MALFORMED_ZIP, 'duplicate Unicode path extra fields in the ' + location + ' are ambiguous', entry.index, entry.name);
+    }
+    for (const field of state.unicodePaths) {
+      validateUnicodePathExtra(entry, field, location, addFinding);
+    }
+  }
 }
 
 function locateEocd(buffer, rejectPolyglot) {
   const minimum = Math.max(0, buffer.length - (EOCD_MIN_LENGTH + UINT16_MAX));
-  let firstPlausible = null;
+  const exact = [];
+  const trailing = [];
   for (let offset = buffer.length - EOCD_MIN_LENGTH; offset >= minimum; offset -= 1) {
     if (readUInt32(buffer, offset) !== EOCD_SIGNATURE) continue;
     const commentLength = readUInt16(buffer, offset + 20);
     const end = offset + EOCD_MIN_LENGTH + commentLength;
     if (end > buffer.length) continue;
     const candidate = { offset, end, commentLength };
-    if (end === buffer.length) return candidate;
-    if (firstPlausible === null) firstPlausible = candidate;
+    if (end === buffer.length) exact.push(candidate);
+    else trailing.push(candidate);
   }
-  return firstPlausible;
+  if (exact.length === 1) return { candidate: exact[0], ambiguous: !rejectPolyglot && trailing.length > 0 };
+  if (exact.length > 1) return { candidate: exact[0], ambiguous: true };
+  if (trailing.length === 1) return { candidate: trailing[0], ambiguous: false };
+  if (trailing.length > 1) return { candidate: trailing[0], ambiguous: true };
+  return null;
 }
 
 function canonicalPathKey(name) {
@@ -386,6 +434,12 @@ function validateEntryPath(entry, config, addFinding) {
   if (stem.length === 0) {
     addFinding(CODE.EMPTY_PATH, 'entry path has no file or directory name', index, name);
   }
+  if (Buffer.byteLength(name, 'utf8') > config.maxPathLength) {
+    addFinding(CODE.PATH_TOO_LONG, 'entry path exceeds maxPathLength', index, name);
+    entry.normalizedName = stem;
+    entry.pathSegments = Object.freeze([]);
+    return;
+  }
   const segments = stem.length === 0 ? [] : stem.split('/');
   for (const segment of segments) {
     if (segment.length === 0) {
@@ -409,10 +463,6 @@ function validateEntryPath(entry, config, addFinding) {
   if (segments.length > config.maxDepth) {
     addFinding(CODE.PATH_TOO_DEEP, 'entry path exceeds maxDepth', index, name);
   }
-  if (Buffer.byteLength(name, 'utf8') > config.maxPathLength) {
-    addFinding(CODE.PATH_TOO_LONG, 'entry path exceeds maxPathLength', index, name);
-  }
-
   entry.normalizedName = segments.join('/');
   entry.pathSegments = Object.freeze(segments.slice());
 }
@@ -595,6 +645,7 @@ function verifyLocalRecord(buffer, entry, centralDirectoryOffset, addFinding) {
 
   const localExtra = buffer.subarray(offset + LOCAL_FIXED_LENGTH + localNameLength, variableEnd);
   const extraState = extraFieldState(localExtra);
+  entry.localExtraState = extraState;
   if (extraState.malformed) {
     addFinding(CODE.MALFORMED_ZIP, 'local file header extra field is malformed', entry.index, entry.name);
   }
@@ -697,7 +748,7 @@ function addDuplicateAndCollisionFindings(entries, config, addFinding) {
   const folded = new Map();
   const types = new Map();
   for (const entry of entries) {
-    if (!entry.normalizedName) continue;
+    if (!entry.normalizedName || entry.pathValidationFailed) continue;
     const key = entry.normalizedName;
     const foldedKey = canonicalPathKey(key);
     if (exact.has(key)) {
@@ -727,7 +778,7 @@ function addDuplicateAndCollisionFindings(entries, config, addFinding) {
   }
 
   for (const entry of entries) {
-    if (!entry.normalizedName) continue;
+    if (!entry.normalizedName || entry.pathValidationFailed) continue;
     const key = canonicalPathKey(entry.normalizedName);
     const typeSet = types.get(key);
     if (typeSet && typeSet.has('file') && typeSet.has('directory')) {
@@ -834,11 +885,16 @@ function inspectZipBuffer(input, options) {
     return finishReport(entries, findings, buffer.length);
   }
 
-  const eocd = locateEocd(buffer, config.rejectPolyglot);
-  if (!eocd) {
+  const eocdResult = locateEocd(buffer, config.rejectPolyglot);
+  if (!eocdResult) {
     addFinding(CODE.MALFORMED_ZIP, 'end of central directory record was not found', null, null);
     return finishReport(entries, findings, buffer.length);
   }
+  if (eocdResult.ambiguous) {
+    addFinding(CODE.MALFORMED_ZIP, 'multiple structurally plausible end of central directory records make the archive ambiguous', null, null);
+    return finishReport(entries, findings, buffer.length);
+  }
+  const eocd = eocdResult.candidate;
   if (config.rejectPolyglot && eocd.end !== buffer.length) {
     addFinding(CODE.POLYGLOT, 'trailing bytes after the end of central directory are rejected', null, null);
   }
@@ -904,6 +960,13 @@ function inspectZipBuffer(input, options) {
     if (centralExtra.zip64) {
       addFinding(CODE.UNSUPPORTED_ZIP64, 'ZIP64 central extra fields are outside the supported scope', entry.index, entry.name);
     }
+    if (
+      entry.compressedSize === UINT32_MAX ||
+      entry.uncompressedSize === UINT32_MAX ||
+      entry.localHeaderOffset === UINT32_MAX
+    ) {
+      addFinding(CODE.UNSUPPORTED_ZIP64, '32-bit sentinel values reserved for ZIP64 are outside the supported scope', entry.index, entry.name);
+    }
     if (entry.diskNumberStart !== 0) {
       addFinding(CODE.MULTI_DISK, 'entry starts on a nonzero disk number', entry.index, entry.name);
     }
@@ -919,12 +982,15 @@ function inspectZipBuffer(input, options) {
     if (entry.compressionMethod !== METHOD_STORED && entry.compressionMethod !== METHOD_DEFLATE) {
       addFinding(CODE.UNSUPPORTED_METHOD, 'only stored and deflate compression methods can be verified', entry.index, entry.name);
     }
+    const pathFindingCount = findings.length;
     validateEntryPath(entry, config, addFinding);
+    entry.pathValidationFailed = findings.length !== pathFindingCount;
     validateUnixAttributes(entry, config, addFinding);
     if (entry.directory && (entry.compressedSize !== 0 || entry.uncompressedSize !== 0)) {
       addFinding(CODE.MALFORMED_ZIP, 'directory entries must not carry compressed or uncompressed file data', entry.index, entry.name);
     }
     verifyLocalRecord(buffer, entry, centralDirectoryOffset, addFinding);
+    validateUnicodePathExtras(entry, centralExtra, entry.localExtraState, addFinding);
   }
 
   if (entries.length > 0) {
@@ -1161,7 +1227,22 @@ let temporaryCounter = 0;
 
 function temporarySibling(parent) {
   temporaryCounter = (temporaryCounter + 1) >>> 0;
-  return path.join(parent, '.zipcage-' + process.pid + '-' + temporaryCounter);
+  return path.join(parent, '.zipcage-' + process.pid + '-' + temporaryCounter + '-' + randomBytes(8).toString('hex'));
+}
+
+async function openTemporarySibling(parent) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const temp = temporarySibling(parent);
+    try {
+      const handle = await fs.open(temp, 'wx', 0o644);
+      return { temp, handle };
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') throw error;
+      lastError = error;
+    }
+  }
+  throw extractionFailure(CODE.EXTRACTION_FAILED, 'could not create a unique temporary extraction file', parent, lastError);
 }
 
 async function installTemporaryFile(temp, destination, overwrite) {
@@ -1206,10 +1287,12 @@ async function extractRegularFile(buffer, entry, root, config) {
   }
 
   const data = await decompressEntry(buffer, entry, config);
-  const temp = temporarySibling(parent);
+  let temp = null;
   let handle = null;
   try {
-    handle = await fs.open(temp, 'wx', 0o644);
+    const opened = await openTemporarySibling(parent);
+    temp = opened.temp;
+    handle = opened.handle;
     await writeBufferFully(handle, data);
     await handle.sync();
     await handle.chmod(0o644);
@@ -1228,7 +1311,7 @@ async function extractRegularFile(buffer, entry, root, config) {
       if (handle !== null) await handle.close();
     } catch {}
     try {
-      await fs.unlink(temp);
+      if (temp !== null) await fs.unlink(temp);
     } catch {}
     if (error instanceof ZipCageError) throw error;
     throw extractionFailure(CODE.EXTRACTION_FAILED, 'atomic extraction write failed', destination, error);

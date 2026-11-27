@@ -14,6 +14,7 @@ export const CODE: Readonly<{
   RATIO_LIMIT: 'ERR_ZIPCAGE_RATIO_LIMIT';
   OVERLAPPING_DATA: 'ERR_ZIPCAGE_OVERLAPPING_DATA';
   INVALID_ENCODING: 'ERR_ZIPCAGE_INVALID_ENCODING';
+  UNICODE_PATH_MISMATCH: 'ERR_ZIPCAGE_UNICODE_PATH_MISMATCH';
   EMPTY_PATH: 'ERR_ZIPCAGE_EMPTY_PATH';
   PATH_TOO_DEEP: 'ERR_ZIPCAGE_PATH_TOO_DEEP';
   PATH_TOO_LONG: 'ERR_ZIPCAGE_PATH_TOO_LONG';
@@ -54,7 +55,8 @@ export type ZipCageErrorCode =
   'ERR_ZIPCAGE_POLYGLOT' | 'ERR_ZIPCAGE_ENTRY_LIMIT' |
   'ERR_ZIPCAGE_SIZE_LIMIT' | 'ERR_ZIPCAGE_RATIO_LIMIT' |
   'ERR_ZIPCAGE_OVERLAPPING_DATA' | 'ERR_ZIPCAGE_INVALID_ENCODING' |
-  'ERR_ZIPCAGE_EMPTY_PATH' | 'ERR_ZIPCAGE_PATH_TOO_DEEP' |
+  'ERR_ZIPCAGE_UNICODE_PATH_MISMATCH' | 'ERR_ZIPCAGE_EMPTY_PATH' |
+  'ERR_ZIPCAGE_PATH_TOO_DEEP' |
   'ERR_ZIPCAGE_PATH_TOO_LONG' | 'ERR_ZIPCAGE_CONTROL_CHARACTER' |
   'ERR_ZIPCAGE_PATH_TRAVERSAL' | 'ERR_ZIPCAGE_ABSOLUTE_PATH' |
   'ERR_ZIPCAGE_DRIVE_PATH' | 'ERR_ZIPCAGE_UNC_PATH' |
@@ -84,6 +86,9 @@ export declare class ZipCageError extends Error {
 }
 
 export type ZipCageInput = Buffer | Uint8Array | ArrayBuffer | DataView;
+
+/** Binary or text input accepted by the ZIP builder for names, fields and comments. */
+export type ZipBuilderBytes = string | Buffer | Uint8Array | ArrayBuffer | DataView;
 
 export interface ZipCageOptions {
   /** Maximum central-directory entries. Default 1000. */
@@ -209,15 +214,15 @@ export type ZipBuilderMethod = 0 | 8 | 'stored' | 'store' | 'deflate';
 
 export interface ZipBuilderEntry {
   /** Central-directory filename. Strings are UTF-8 encoded. */
-  name?: string | Buffer | Uint8Array;
+  name?: ZipBuilderBytes;
   /** Raw central filename bytes for adversarial fixtures. Overrides the encoded name. */
-  nameBytes?: string | Buffer | Uint8Array;
+  nameBytes?: ZipBuilderBytes;
   /** Raw local filename bytes. Defaults to nameBytes. */
-  localNameBytes?: string | Buffer | Uint8Array;
-  data?: string | Buffer | Uint8Array | ArrayBuffer | DataView;
+  localNameBytes?: ZipBuilderBytes;
+  data?: ZipBuilderBytes;
   method?: ZipBuilderMethod;
   /** Raw compressed bytes. Useful for corrupted, truncated or deceptive-stream fixtures. */
-  compressedData?: string | Buffer | Uint8Array | ArrayBuffer | DataView;
+  compressedData?: ZipBuilderBytes;
   directory?: boolean;
   utf8?: boolean;
   dataDescriptor?: boolean;
@@ -242,9 +247,9 @@ export interface ZipBuilderEntry {
   localUncompressedSize?: number;
   centralMethod?: number;
   localMethod?: number;
-  localExtra?: string | Buffer | Uint8Array;
-  centralExtra?: string | Buffer | Uint8Array;
-  comment?: string | Buffer | Uint8Array;
+  localExtra?: ZipBuilderBytes;
+  centralExtra?: ZipBuilderBytes;
+  comment?: ZipBuilderBytes;
   /** Omit the local record. Requires centralLocalHeaderOffset. For adversarial fixtures only. */
   writeLocal?: boolean;
   /** Central-directory local-header offset override. For overlapping and aliasing fixtures only. */
@@ -255,11 +260,11 @@ export interface ZipBuilderOptions {
   /** Validate the output with default zipcage security policy. Default true. */
   validate?: boolean;
   /** Bytes placed before the first record. Offsets are adjusted so the result is structurally parseable. */
-  prependBytes?: string | Buffer | Uint8Array;
+  prependBytes?: ZipBuilderBytes;
   /** Bytes appended after the end of central directory. */
-  trailingBytes?: string | Buffer | Uint8Array;
+  trailingBytes?: ZipBuilderBytes;
   /** Archive comment bytes, at most 65535 bytes. */
-  comment?: string | Buffer | Uint8Array;
+  comment?: ZipBuilderBytes;
 }
 
 export interface ZipCageGuard {

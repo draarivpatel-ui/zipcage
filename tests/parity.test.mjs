@@ -80,7 +80,7 @@ test('package self-reference resolves to CommonJS from require', () => {
 test('generated CommonJS build is byte deterministic', async () => {
   const cjsPath = path.join(root, 'cjs', 'index.cjs');
   const before = await readFile(cjsPath);
-  const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'build-cjs.mjs')], {
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'build-cjs.mjs'), '--check'], {
     cwd: root,
     encoding: 'utf8'
   });
@@ -142,6 +142,8 @@ test('gitattributes enforces LF line endings for generated CommonJS', async () =
   const text = await readFile(path.join(root, '.gitattributes'), 'utf8');
   assert.match(text, /^\* text=auto eol=lf$/m);
   assert.match(text, /^\*\.cjs text eol=lf$/m);
+  assert.match(text, /^\*\.mjs text eol=lf$/m);
+  assert.match(text, /^\*\.ts text eol=lf$/m);
 });
 
 test('TypeScript declarations expose the complete public API', async () => {
@@ -171,7 +173,7 @@ test('TypeScript declarations contain every runtime error code', async () => {
 test('source imports only permitted Node built-ins', async () => {
   const text = await readFile(path.join(root, 'src', 'index.mjs'), 'utf8');
   const imports = [...text.matchAll(/^import .*? from '([^']+)';$/gm)].map((match) => match[1]).sort();
-  assert.deepEqual(imports, ['node:buffer', 'node:fs', 'node:path', 'node:zlib']);
+  assert.deepEqual(imports, ['node:buffer', 'node:crypto', 'node:fs', 'node:path', 'node:zlib']);
   assert.equal(/require\s*\(/.test(text), false);
   assert.equal(/import\s*\(/.test(text), false);
 });

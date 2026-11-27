@@ -10,7 +10,7 @@ local-header parser differentials. It ships ESM, CommonJS and strict TypeScript
 definitions from one audited source of truth.
 
 - Zero runtime dependencies and zero devDependencies
-- 442 deterministic tests verified live with `npm test`
+- 459 deterministic tests verified live with `npm test`
 - ESM and CommonJS parity tested through package self-reference
 - Stored and Deflate extraction through `node:zlib.createInflateRaw`
 - Hard byte-counting output caps that do not trust header sizes
@@ -221,7 +221,22 @@ For every central-directory entry, the referenced local file header must exist
 and agree on filename bytes, compression method, flags and version needed. When
 bit 3 is clear, CRC-32, compressed size and uncompressed size must also agree.
 When bit 3 is set, the data descriptor is present and checked against the
-central directory.
+central directory. Both signed and unsigned data descriptors are accepted, with
+exact compressed-size, uncompressed-size and CRC-32 agreement required.
+
+Info-ZIP Unicode Path extra fields (`0x7075`) are validated rather than
+preferred. A field must be version 1, valid UTF-8, carry the correct CRC-32 of
+the primary filename bytes and decode to exactly the same filename. A different
+Unicode path is rejected as `ERR_ZIPCAGE_UNICODE_PATH_MISMATCH` because other
+unzippers may prefer it and extract a different path. Duplicate or malformed
+Unicode path fields are rejected as ambiguous.
+
+The end-of-central-directory scan also rejects multiple structurally plausible
+EOCD records. A forged EOCD inside a ZIP comment or trailing data is therefore
+not allowed to silently replace the real end record. Because trailing bytes make
+EOCD provenance ambiguous, setting `rejectPolyglot: false` also treats an EOCD
+embedded in stored file data as ambiguous. The strict default correctly ignores
+those embedded payload bytes and uses the outer end record.
 
 Local records must be contiguous in physical order when `rejectPolyglot` is
 true. Compressed data may not overlap another compressed range or the next
@@ -277,6 +292,9 @@ and raw-deflate entries in the classic 32-bit ZIP format.
   private empty target directory for hostile archives.
 - Digital signatures, archive extra data records and rare alignment padding are
   treated as strict structural anomalies when polyglot rejection is enabled.
+- Unicode Path extra fields that carry a different name from the primary ZIP
+  filename are rejected. Archives that depend on that replacement behavior are
+  outside the supported extraction scope because unzip implementations differ.
 
 These are scope boundaries, not silent exceptions. Unsupported structures fail
 closed with stable machine-readable error codes.
